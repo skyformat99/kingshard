@@ -15,16 +15,14 @@ import (
 	"github.com/flike/kingshard/proxy/server"
 )
 
-var configFile *string = flag.String("config", "/etc/kingshard.conf", "kingshard config file")
-var logLevel *string = flag.String("log-level", "", "log level [debug|info|warn|error], default error")
-
 const (
 	sqlLogName = "sql.log"
 	sysLogName = "sys.log"
-	MaxLogSize = 1024 * 1024 * 1024
+	// maxLogSize is the maximun log size
+	maxLogSize = 1 << 30 // 1GB
 )
 
-const banner string = `
+const banner = `
     __   _                  __                   __
    / /__(_)___  ____ ______/ /_  ____ __________/ /
   / //_/ / __ \/ __ \/ ___/ __ \ / __\/ ___/ __  /
@@ -33,17 +31,29 @@ const banner string = `
              /____/
 `
 
+var (
+	configFile string
+	logLevel   string
+)
+
+func init() {
+	flag.StringVar(&configFile, "config", "/etc/kingshard.conf", "kingshard config file")
+	flag.StringVar(&logLevel, "log-level", "", "log level [debug|info|warn|error], default error")
+
+	runtime.GOMAXPROCS(runtime.NumCPU())
+}
+
 func main() {
 	fmt.Print(banner)
-	runtime.GOMAXPROCS(runtime.NumCPU())
+
 	flag.Parse()
 
-	if len(*configFile) == 0 {
+	if len(configFile) == 0 {
 		fmt.Println("must use a config file")
 		return
 	}
 
-	cfg, err := config.ParseConfigFile(*configFile)
+	cfg, err := config.ParseConfigFile(configFile)
 	if err != nil {
 		fmt.Printf("parse config file error:%v\n", err.Error())
 		return
@@ -52,7 +62,7 @@ func main() {
 	//when the log file size greater than 1GB, kingshard will generate a new file
 	if len(cfg.LogPath) != 0 {
 		sysFilePath := path.Join(cfg.LogPath, sysLogName)
-		sysFile, err := golog.NewRotatingFileHandler(sysFilePath, MaxLogSize, 1)
+		sysFile, err := golog.NewRotatingFileHandler(sysFilePath, maxLogSize, 1)
 		if err != nil {
 			fmt.Printf("new log file error:%v\n", err.Error())
 			return
@@ -60,7 +70,7 @@ func main() {
 		golog.GlobalSysLogger = golog.New(sysFile, golog.Lfile|golog.Ltime|golog.Llevel)
 
 		sqlFilePath := path.Join(cfg.LogPath, sqlLogName)
-		sqlFile, err := golog.NewRotatingFileHandler(sqlFilePath, MaxLogSize, 1)
+		sqlFile, err := golog.NewRotatingFileHandler(sqlFilePath, maxLogSize, 1)
 		if err != nil {
 			fmt.Printf("new log file error:%v\n", err.Error())
 			return
@@ -68,11 +78,14 @@ func main() {
 		golog.GlobalSqlLogger = golog.New(sqlFile, golog.Lfile|golog.Ltime|golog.Llevel)
 	}
 
-	if *logLevel != "" {
-		setLogLevel(*logLevel)
+	if logLevel != "" {
+		setLogLevel(logLevel)
 	} else {
 		setLogLevel(cfg.LogLevel)
 	}
+
+	// Start Admin Dashboard
+	go StartAdminDashboard(cfg)
 
 	var svr *server.Server
 	svr, err = server.NewServer(cfg)
